@@ -49,6 +49,11 @@ pub struct App {
     pub selected_column: Option<usize>,
     pub graphs_bpf_program: Arc<Mutex<Option<BpfProgram>>>,
     sorted_column: Arc<Mutex<SortColumn>>,
+    run_time: u64,
+    output_file: String,
+    start_time: Instant,
+    shutdown_sender: crossbeam::channel::Sender<()>,
+    pub shutdown_receiver: crossbeam::channel::Receiver<()>,
 }
 
 pub struct PeriodMeasure {
@@ -122,11 +127,13 @@ fn get_pid_map(link: &Option<Link>) -> HashMap<u32, Vec<Process>> {
 }
 
 impl App {
-    pub fn new() -> App {
+    pub fn new(output_file: String, run_time: u64) -> App {
         // Initialize output JSON file with empty array
-        if let Err(e) = fs::write("/tmp/bpftop.json", "[]") {
-            eprintln!("Failed to initialize /tmp/bpftop.json: {}", e);
+        if let Err(e) = fs::write(&output_file, "[]") {
+            eprintln!("Failed to initialize {}: {}", output_file, e);
         }
+
+        let (shutdown_sender, shutdown_receiver) = crossbeam::channel::bounded(1);
 
         let mut app = App {
             mode: Mode::Table,
@@ -151,6 +158,11 @@ impl App {
             selected_column: None,
             graphs_bpf_program: Arc::new(Mutex::new(None)),
             sorted_column: Arc::new(Mutex::new(SortColumn::NoOrder)),
+            run_time,
+            output_file,
+            start_time: Instant::now(),
+            shutdown_sender,
+            shutdown_receiver,
         };
         // Default sort column is Total CPU % in descending order
         app.sort_column(SortColumn::Descending(6));
@@ -163,6 +175,10 @@ impl App {
         let filter = Arc::clone(&self.filter_input);
         let sort_col = Arc::clone(&self.sorted_column);
         let graphs_bpf_program = Arc::clone(&self.graphs_bpf_program);
+        let run_time = self.run_time;
+        let start_time = self.start_time;
+        let output_file = self.output_file.clone();
+        let shutdown_sender = self.shutdown_sender.clone();
 
         thread::spawn(move || loop {
             let loop_start = Instant::now();
@@ -265,10 +281,16 @@ impl App {
                 SortColumn::NoOrder => {}
             }
 
+            // Check if run time limit has been reached
+            if run_time > 0 && start_time.elapsed().as_secs() >= run_time {
+                let _ = shutdown_sender.send(());
+                break;
+            }
+
             // Write current BPF programs to JSON file
             if let Ok(json) = serde_json::to_string_pretty(&*items) {
-                if let Err(e) = fs::write("/tmp/bpftop.json", json) {
-                    eprintln!("Failed to write /tmp/bpftop.json: {}", e);
+                if let Err(e) = fs::write(&output_file, json) {
+                    eprintln!("Failed to write {}: {}", output_file, e);
                 }
             } else {
                 eprintln!("Failed to serialize BPF programs to JSON");
@@ -455,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_next_program_with_empty() {
-        let mut app = App::new();
+        let mut app = App::new("".to_string(), 0);
 
         // Initially no item is selected
         assert_eq!(app.selected_program(), None);
@@ -467,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_next_program() {
-        let mut app = App::new();
+        let mut app = App::new("".to_string(), 0);
         let prog_1 = BpfProgram {
             id: 1,
             bpf_type: "test".to_string(),
@@ -521,8 +543,7 @@ mod tests {
 
     #[test]
     fn test_previous_program_with_empty() {
-        let mut app = App::new();
-
+        let mut app = App::new("".to_string(), 0);
         // Initially no item is selected
         assert_eq!(app.selected_program(), None);
         
@@ -540,7 +561,7 @@ mod tests {
 
     #[test]
     fn test_previous_program() {
-        let mut app = App::new();
+        let mut app = App::new("".to_string(), 0);
         let prog_1 = BpfProgram {
             id: 1,
             bpf_type: "test".to_string(),
@@ -597,7 +618,7 @@ mod tests {
 
     #[test]
     fn test_toggle_graphs() {
-        let mut app = App::new();
+        let mut app = App::new("".to_string(), 0);
 
         // Initially, UI should be in table mode
         assert_eq!(app.mode, Mode::Table);

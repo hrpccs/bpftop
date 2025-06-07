@@ -87,9 +87,17 @@ const TABLE_FOOTER_HEIGHT: u16 = 1; // derived from `TABLE_FOOTER`
     ),
     author = "Jose Fernandez",
     about = env!("CARGO_PKG_DESCRIPTION"),
-    override_usage = "sudo bpftop"
+    override_usage = "sudo bpftop [OPTIONS]"
 )]
-struct Bpftop {}
+struct Bpftop {
+    /// Run duration in seconds (0 for unlimited)
+    #[arg(short = 't', long, default_value_t = 0)]
+    run_time: u64,
+
+    /// Output file path for JSON data
+    #[arg(short = 'o', long, default_value = "/tmp/bpftop.json")]
+    output_file: String,
+}
 
 impl From<&BpfProgram> for Row<'_> {
     fn from(bpf_program: &BpfProgram) -> Self {
@@ -210,7 +218,8 @@ fn main() -> Result<()> {
     let mut terminal_manager = TerminalManager::new()?;
 
     // create app and run the draw loop
-    let app = App::new();
+    let args = Bpftop::parse();
+    let app = App::new(args.output_file, args.run_time);
     app.start_background_thread(iter_link);
     let res = run_draw_loop(&mut terminal_manager.terminal, app);
 
@@ -244,6 +253,11 @@ fn procfs_bpf_stats_is_enabled() -> Result<bool> {
 fn run_draw_loop<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
+
+        // Check for shutdown signal
+        if let Ok(()) = app.shutdown_receiver.try_recv() {
+            return Ok(());
+        }
 
         // wait up to 100ms for a keyboard event
         if poll(Duration::from_millis(50))? {
