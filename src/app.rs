@@ -289,13 +289,15 @@ impl App {
                 break;
             }
 
-            // Write current BPF programs to JSON file
-            if let Ok(json) = serde_json::to_string_pretty(&*items) {
-                if let Err(e) = fs::write(&output_file, json) {
-                    eprintln!("Failed to write {}: {}", output_file, e);
+            // Write current BPF programs to JSON file only if output path is specified
+            if !output_file.is_empty() {
+                if let Ok(json) = serde_json::to_string_pretty(&*items) {
+                    if let Err(e) = fs::write(&output_file, json) {
+                        eprintln!("Failed to write {}: {}", output_file, e);
+                    }
+                } else {
+                    eprintln!("Failed to serialize BPF programs to JSON");
                 }
-            } else {
-                eprintln!("Failed to serialize BPF programs to JSON");
             }
 
             // Explicitly drop the remaining MutexGuards
