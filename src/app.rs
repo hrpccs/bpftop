@@ -127,10 +127,12 @@ fn get_pid_map(link: &Option<Link>) -> HashMap<u32, Vec<Process>> {
 }
 
 impl App {
-    pub fn new(output_file: String, run_time: u64) -> App {
+    pub fn new(output_file: &str, run_time: u64) -> App {
         // Initialize output JSON file with empty array
-        if let Err(e) = fs::write(&output_file, "[]") {
-            eprintln!("Failed to initialize {}: {}", output_file, e);
+        if !output_file.is_empty() {
+            if let Err(e) = fs::write(output_file, "[]") {
+                eprintln!("Failed to initialize {}: {}", output_file, e);
+            }
         }
 
         let (shutdown_sender, shutdown_receiver) = crossbeam::channel::bounded(1);
@@ -159,7 +161,7 @@ impl App {
             graphs_bpf_program: Arc::new(Mutex::new(None)),
             sorted_column: Arc::new(Mutex::new(SortColumn::NoOrder)),
             run_time,
-            output_file,
+            output_file: output_file.to_string(),
             start_time: Instant::now(),
             shutdown_sender,
             shutdown_receiver,
@@ -468,6 +470,11 @@ impl App {
 
         // Exit sort mode
         self.toggle_sort();
+    }
+
+    pub fn get_data(&self) -> Result<String, anyhow::Error> {
+        let items = self.items.lock().unwrap();
+        Ok(serde_json::to_string_pretty(&*items)?)
     }
 }
 

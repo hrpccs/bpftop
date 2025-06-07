@@ -94,9 +94,9 @@ struct Bpftop {
     #[arg(short = 't', long, default_value_t = 0)]
     run_time: u64,
 
-    /// Output file path for JSON data
-    #[arg(short = 'o', long, default_value = "/tmp/bpftop.json")]
-    output_file: String,
+    /// Output file path for JSON data (when specified, runs in non-interactive mode)
+    #[arg(short = 'o', long)]
+    output_file: Option<String>,
 }
 
 impl From<&BpfProgram> for Row<'_> {
@@ -144,10 +144,73 @@ impl Drop for TerminalManager {
 }
 
 fn main() -> Result<()> {
-    let _ = Bpftop::parse();
+    let args = Bpftop::parse();
 
     if !nix::unistd::Uid::current().is_root() {
         return Err(anyhow!("This program must be run as root"));
+    }
+
+    // Non-interactive mode when output file is specified
+    if let Some(output_path) = args.output_file {
+        // Initialize data collection without terminal UI
+        let kernel_version = KernelVersion::current()?;
+        let _owned_fd: OwnedFd;
+        let mut stats_enabled_via_procfs = false;
+        let mut iter_link = None;
+
+        info!("Starting bpftop in non-interactive mode...");
+        info!("Output will be saved to: {}", output_path);
+        info!("Kernel: {:?}", kernel_version);
+
+        // enable BPF stats via syscall if kernel version >= 5.8
+        if kernel_version >= KernelVersion::new(5, 8, 0) {
+            let fd = unsafe { bpf_enable_stats(libbpf_sys::BPF_STATS_RUN_TIME) };
+            if fd < 0 {
+                return Err(anyhow!("Failed to enable BPF stats via syscall"));
+            }
+            _owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
+            info!("Enabled BPF stats via syscall");
+
+            // load and attach pid_iter BPF program to get process information
+            let skel_builder = PidIterSkelBuilder::default();
+            let mut open_object = MaybeUninit::uninit();
+            let open_skel = skel_builder.open(&mut open_object)?;
+            let mut skel = open_skel.load()?;
+            skel.attach()?;
+            iter_link = skel.links.bpftop_iter;
+        } else {
+            // otherwise, enable via procfs
+            if procfs_bpf_stats_is_enabled()? {
+                info!("BPF stats already enabled via procfs");
+            } else {
+                fs::write(PROCFS_BPF_STATS_ENABLED, b"1").context(format!(
+                    "Failed to enable BPF stats via {}",
+                    PROCFS_BPF_STATS_ENABLED
+                ))?;
+                stats_enabled_via_procfs = true;
+                info!("Enabled BPF stats via procfs");
+            }
+        }
+
+        // Create app and start background thread
+        let app = App::new(&output_path, args.run_time);
+        app.start_background_thread(iter_link);
+
+        // Wait for shutdown signal or timeout
+        while app.shutdown_receiver.try_recv().is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Write collected data to file
+        let data = app.get_data()?;
+        std::fs::write(output_path, data)?;
+
+        // disable BPF stats via procfs if needed
+        if stats_enabled_via_procfs {
+            procs_bfs_stats_disable()?;
+        }
+
+        return Ok(());
     }
 
     // Initialize the journald layer or ignore if not available
@@ -219,7 +282,7 @@ fn main() -> Result<()> {
 
     // create app and run the draw loop
     let args = Bpftop::parse();
-    let app = App::new(args.output_file, args.run_time);
+    let app = App::new(&args.output_file.unwrap_or_default(), args.run_time);
     app.start_background_thread(iter_link);
     let res = run_draw_loop(&mut terminal_manager.terminal, app);
 
