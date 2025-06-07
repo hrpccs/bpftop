@@ -20,6 +20,9 @@ use circular_buffer::CircularBuffer;
 use libbpf_rs::{query::ProgInfoIter, Iter, Link};
 use ratatui::widgets::ScrollbarState;
 use ratatui::widgets::TableState;
+use chrono;
+use serde_json;
+use std::fs;
 use std::{
     collections::HashMap,
     io::Read,
@@ -120,6 +123,11 @@ fn get_pid_map(link: &Option<Link>) -> HashMap<u32, Vec<Process>> {
 
 impl App {
     pub fn new() -> App {
+        // Initialize output JSON file with empty array
+        if let Err(e) = fs::write("/tmp/bpftop.json", "[]") {
+            eprintln!("Failed to initialize /tmp/bpftop.json: {}", e);
+        }
+
         let mut app = App {
             mode: Mode::Table,
             vertical_scroll: 0,
@@ -255,6 +263,15 @@ impl App {
                     }
                 }
                 SortColumn::NoOrder => {}
+            }
+
+            // Write current BPF programs to JSON file
+            if let Ok(json) = serde_json::to_string_pretty(&*items) {
+                if let Err(e) = fs::write("/tmp/bpftop.json", json) {
+                    eprintln!("Failed to write /tmp/bpftop.json: {}", e);
+                }
+            } else {
+                eprintln!("Failed to serialize BPF programs to JSON");
             }
 
             // Explicitly drop the remaining MutexGuards

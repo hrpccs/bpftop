@@ -15,12 +15,13 @@
  *  limitations under the License.
  *
  */
+use serde::Serialize;
 use std::{
     fmt::{self},
     time::Instant,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct BpfProgram {
     pub id: u32,
     pub bpf_type: String,
@@ -29,13 +30,14 @@ pub struct BpfProgram {
     pub run_time_ns: u64,
     pub prev_run_cnt: u64,
     pub run_cnt: u64,
+    #[serde(skip)]
     pub instant: Instant,
     pub period_ns: u128,
     // List of processes that hold a reference to this BPF program
     pub processes: Vec<Process>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Process {
     pub pid: i32,
     pub comm: String,
